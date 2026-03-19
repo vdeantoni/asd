@@ -2,6 +2,13 @@
 name = "asd"
 version = "0.1.0"
 edition = "2021"
+description = "A terminal-based side-by-side diff viewer with syntax highlighting"
+license = "MIT"
+repository = "https://github.com/vdeantoni/asd"
+readme = "README.md"
+keywords = ["diff", "terminal", "tui", "syntax-highlighting", "side-by-side"]
+categories = ["command-line-utilities", "development-tools"]
+homepage = "https://github.com/vdeantoni/asd"
 
 [dependencies]
 ratatui = "0.29"
@@ -16,3 +23,8 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
