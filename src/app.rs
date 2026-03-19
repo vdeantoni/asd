@@ -28,12 +28,11 @@ pub struct App {
     pub window_start: usize,
     pub should_quit: bool,
     tty: File,
-    /// BFS queue of leaf NodeIds to split next. Front = oldest unsplit pane.
     split_queue: VecDeque<NodeId>,
-    /// Cached leaf rects from last render, keyed by NodeId.
     leaf_rects: Vec<(NodeId, Rect)>,
-    /// Counter for assigning pane indices during render.
     pane_counter: usize,
+    pub show_file_list: bool,
+    pub file_list_cursor: usize,
 }
 
 impl App {
@@ -44,10 +43,33 @@ impl App {
             window_start: 0,
             should_quit: false,
             tty,
-            split_queue: VecDeque::from([0]), // root leaf
+            split_queue: VecDeque::from([0]),
             leaf_rects: Vec::new(),
             pane_counter: 0,
+            show_file_list: false,
+            file_list_cursor: 0,
         }
+    }
+
+    /// Indices into `files` Vec for non-hidden files, in order.
+    fn visible_indices(&self) -> Vec<usize> {
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.hidden)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Resolve a slot (position in visible list) to an index in `files`.
+    fn file_index_for_slot(&self, slot: usize) -> Option<usize> {
+        let vis = self.visible_indices();
+        let idx = self.window_start + slot;
+        vis.get(idx).copied()
+    }
+
+    fn visible_count(&self) -> usize {
+        self.files.iter().filter(|f| !f.hidden).count()
     }
 
     pub fn handle_event(&mut self) -> color_eyre::Result<()> {
@@ -57,9 +79,12 @@ impl App {
             return Ok(());
         }
 
+        if self.show_file_list {
+            return self.handle_file_list_event(buf, n);
+        }
+
         // Escape sequences
         if buf[0] == 27 && n >= 3 && buf[1] == b'[' {
-            // Shift+arrow: ESC [ 1 ; 2 A/B/C/D (6 bytes)
             if n >= 6 && buf[2] == b'1' && buf[3] == b';' && buf[4] == b'2' {
                 match buf[5] {
                     b'A' => self.scroll_up(),
@@ -70,7 +95,6 @@ impl App {
                 }
                 return Ok(());
             }
-            // Plain arrow: ESC [ A/B/C/D (3 bytes)
             match buf[2] {
                 b'A' => self.focus_direction(Dir::Up),
                 b'B' => self.focus_direction(Dir::Down),
@@ -82,20 +106,138 @@ impl App {
         }
 
         match buf[0] {
-            b'q' | 27 => self.should_quit = true,
+            b'q' | 27 | 3 => self.should_quit = true,
             b'a' => self.navigate_prev(),
             b'd' => self.navigate_next(),
-            b's' | b' ' => self.try_split(),
+            b's' => self.try_split(),
             b'S' => self.split_focused(None),
             b'v' => self.split_focused(Some(Direction::Horizontal)),
             b'h' => self.split_focused(Some(Direction::Vertical)),
             b'\t' => self.tree.cycle_focus(),
             b'w' => self.close_pane(),
+            b' ' => self.hide_focused_file(),
+            b'r' => self.reset(),
+            b'f' => {
+                self.show_file_list = true;
+                self.file_list_cursor = 0;
+            }
             b'0'..=b'9' => self.focus_by_index((buf[0] - b'0') as usize),
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn handle_file_list_event(&mut self, buf: [u8; 6], n: usize) -> color_eyre::Result<()> {
+        if buf[0] == 27 && n >= 3 && buf[1] == b'[' {
+            // Shift+arrow: ESC [ 1 ; 2 A/B (reorder)
+            if n >= 6 && buf[2] == b'1' && buf[3] == b';' && buf[4] == b'2' {
+                match buf[5] {
+                    b'A' => {
+                        // Shift+Up: move file up
+                        if self.file_list_cursor > 0 {
+                            self.files.swap(self.file_list_cursor, self.file_list_cursor - 1);
+                            self.file_list_cursor -= 1;
+                        }
+                    }
+                    b'B' => {
+                        // Shift+Down: move file down
+                        if self.file_list_cursor + 1 < self.files.len() {
+                            self.files.swap(self.file_list_cursor, self.file_list_cursor + 1);
+                            self.file_list_cursor += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+            // Plain arrow: navigate cursor
+            match buf[2] {
+                b'A' => {
+                    if self.file_list_cursor > 0 {
+                        self.file_list_cursor -= 1;
+                    }
+                }
+                b'B' => {
+                    if self.file_list_cursor + 1 < self.files.len() {
+                        self.file_list_cursor += 1;
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match buf[0] {
+            b'f' | 27 => self.show_file_list = false,
+            b' ' => {
+                // Toggle hidden
+                if self.file_list_cursor < self.files.len() {
+                    let was_hidden = self.files[self.file_list_cursor].hidden;
+                    self.files[self.file_list_cursor].hidden = !was_hidden;
+                    self.clamp_window();
+                }
+            }
+            b'\r' | b'\n' => {
+                // Enter: close and navigate to selected file
+                self.show_file_list = false;
+                self.navigate_to_file(self.file_list_cursor);
+            }
+            b'q' | 3 => self.should_quit = true,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Navigate so the file at `files_idx` is shown in the focused pane.
+    fn navigate_to_file(&mut self, files_idx: usize) {
+        if files_idx >= self.files.len() || self.files[files_idx].hidden {
+            return;
+        }
+        let vis = self.visible_indices();
+        if let Some(vis_pos) = vis.iter().position(|&i| i == files_idx) {
+            // Set window_start so this file appears in slot 0
+            let max_start = vis.len().saturating_sub(self.tree.leaf_count);
+            self.window_start = vis_pos.min(max_start);
+            self.tree.reset_all_scroll();
+        }
+    }
+
+    fn hide_focused_file(&mut self) {
+        if let SplitNode::Leaf { slot, .. } = &self.tree.nodes[self.tree.focused] {
+            if let Some(file_index) = self.file_index_for_slot(*slot) {
+                // Don't allow hiding the last visible file
+                if self.visible_count() <= 1 {
+                    return;
+                }
+                self.files[file_index].hidden = true;
+                self.clamp_window();
+            }
+        }
+    }
+
+    /// Ensure window_start is valid after hiding files or reordering.
+    fn clamp_window(&mut self) {
+        let vis_count = self.visible_count();
+        if vis_count == 0 {
+            return;
+        }
+        let max_start = vis_count.saturating_sub(self.tree.leaf_count);
+        if self.window_start > max_start {
+            self.window_start = max_start;
+        }
+    }
+
+    fn reset(&mut self) {
+        for file in &mut self.files {
+            file.hidden = false;
+        }
+        self.window_start = 0;
+        self.tree = SplitTree::new();
+        self.split_queue = VecDeque::from([self.tree.root]);
+        self.show_file_list = false;
+        self.file_list_cursor = 0;
     }
 
     fn navigate_prev(&mut self) {
@@ -106,7 +248,7 @@ impl App {
     }
 
     fn navigate_next(&mut self) {
-        let max_start = self.files.len().saturating_sub(self.tree.leaf_count);
+        let max_start = self.visible_count().saturating_sub(self.tree.leaf_count);
         if self.window_start < max_start {
             self.window_start += 1;
             self.tree.reset_all_scroll();
@@ -133,8 +275,7 @@ impl App {
 
     fn focused_file_line_count(&self) -> usize {
         if let SplitNode::Leaf { slot, .. } = &self.tree.nodes[self.tree.focused] {
-            let file_index = self.window_start + slot;
-            if file_index < self.files.len() {
+            if let Some(file_index) = self.file_index_for_slot(*slot) {
                 return self.files[file_index].styled_lines.len();
             }
         }
@@ -143,33 +284,28 @@ impl App {
 
     fn try_split(&mut self) {
         let needed = self.tree.leaf_count + 1;
-        if self.window_start + needed > self.files.len() {
-            return; // not enough files, noop
+        if self.window_start + needed > self.visible_count() {
+            return;
         }
 
-        // BFS: try the front of the queue. If stale or too small, rotate.
         let max_tries = self.split_queue.len();
         for _ in 0..max_tries {
             let Some(&target_id) = self.split_queue.front() else {
                 break;
             };
 
-            // Skip if no longer a leaf (was already split or removed)
             if !matches!(self.tree.nodes.get(target_id), Some(SplitNode::Leaf { .. })) {
                 self.split_queue.pop_front();
                 continue;
             }
 
-            // Check if this pane is big enough
             let rect = self.rect_for(target_id);
             if rect.width < MIN_SPLIT_DIM || rect.height < MIN_SPLIT_DIM {
-                // Too small — rotate to back, try next
                 self.split_queue.pop_front();
                 self.split_queue.push_back(target_id);
                 continue;
             }
 
-            // Split it!
             self.split_queue.pop_front();
 
             let direction = split_direction(rect);
@@ -178,22 +314,17 @@ impl App {
             self.split_queue.push_back(child_a);
             self.split_queue.push_back(child_b);
 
-            // Focus stays where it was — split is focus-agnostic.
-            // But if the focused node was the one split, keep focus on child_a (same content).
             if self.tree.focused == target_id {
                 self.tree.focused = child_a;
             }
 
             return;
         }
-
-        // All panes too small — noop
     }
 
-    /// Split the focused pane. If `dir` is None, auto-detect from aspect ratio.
     fn split_focused(&mut self, dir: Option<Direction>) {
         let needed = self.tree.leaf_count + 1;
-        if self.window_start + needed > self.files.len() {
+        if self.window_start + needed > self.visible_count() {
             return;
         }
 
@@ -219,7 +350,6 @@ impl App {
 
     fn close_pane(&mut self) {
         self.tree.close_focused();
-        // Rebuild queue from current leaves in traversal order
         let leaves = self.tree.collect_leaves(self.tree.root);
         self.split_queue = VecDeque::from(leaves);
     }
@@ -252,7 +382,6 @@ impl App {
             let dx = cx - fc_x;
             let dy = cy - fc_y;
 
-            // Check if candidate is in the correct direction
             let in_dir = match dir {
                 Dir::Left => dx < 0,
                 Dir::Right => dx > 0,
@@ -263,8 +392,6 @@ impl App {
                 continue;
             }
 
-            // Distance: weight perpendicular axis more so we prefer
-            // panes that are aligned on the primary axis
             let cost = match dir {
                 Dir::Left | Dir::Right => dx.abs() + dy.abs() * 3,
                 Dir::Up | Dir::Down => dy.abs() + dx.abs() * 3,
@@ -302,7 +429,12 @@ impl App {
         self.leaf_rects.clear();
         self.pane_counter = 0;
         self.render_node(f, self.tree.root, chunks[0]);
-        ui::render_footer(f, chunks[1]);
+
+        if self.show_file_list {
+            ui::render_file_list(f, size, &self.files, self.file_list_cursor);
+        }
+
+        ui::render_footer(f, chunks[1], self.show_file_list);
     }
 
     fn render_node(&mut self, f: &mut Frame, node_id: NodeId, area: Rect) {
@@ -311,21 +443,23 @@ impl App {
                 let slot = *slot;
                 let scroll_y = *scroll_y;
                 let scroll_x = *scroll_x;
-                let file_index = self.window_start + slot;
                 let pane_index = self.pane_counter;
                 self.pane_counter += 1;
 
                 self.leaf_rects.push((node_id, area));
 
-                if file_index < self.files.len() {
+                let vis = self.visible_indices();
+                let vis_idx = self.window_start + slot;
+                if let Some(&file_index) = vis.get(vis_idx) {
                     let file = &self.files[file_index];
                     let is_focused = node_id == self.tree.focused;
+                    let total_visible = vis.len();
                     ui::render_pane(
                         f,
                         area,
                         file,
-                        file_index,
-                        self.files.len(),
+                        vis_idx,
+                        total_visible,
                         is_focused,
                         scroll_y,
                         scroll_x,
@@ -355,15 +489,13 @@ impl App {
     }
 }
 
-/// Determine split direction based on visual aspect ratio.
-/// Accounts for terminal cell aspect ratio (~2:1 height:width).
 fn split_direction(rect: Rect) -> Direction {
     let visual_height = rect.height as u32 * 2;
     let visual_width = rect.width as u32;
     if visual_height >= visual_width {
-        Direction::Vertical   // horizontal cut → top/bottom
+        Direction::Vertical
     } else {
-        Direction::Horizontal // vertical cut → left|right
+        Direction::Horizontal
     }
 }
 

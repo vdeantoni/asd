@@ -206,6 +206,7 @@ pub fn demo_files() -> Vec<FileDiff> {
                 deletions,
                 lines,
                 styled_lines: Vec::new(),
+                hidden: false,
             }
         })
         .collect()

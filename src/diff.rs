@@ -21,6 +21,7 @@ pub struct FileDiff {
     pub deletions: usize,
     pub lines: Vec<DiffLine>,
     pub styled_lines: Vec<Line<'static>>,
+    pub hidden: bool,
 }
 
 pub fn parse_diff(input: &str) -> Vec<FileDiff> {
@@ -134,6 +135,7 @@ pub fn parse_diff(input: &str) -> Vec<FileDiff> {
             deletions,
             lines: diff_lines,
             styled_lines: Vec::new(),
+            hidden: false,
         });
     }
 
