@@ -18,6 +18,7 @@ const MIN_SPLIT_DIM: u16 = 50;
 enum Dir {
     Up,
     Down,
+    Left,
     Right,
 }
 
@@ -50,18 +51,31 @@ impl App {
     }
 
     pub fn handle_event(&mut self) -> color_eyre::Result<()> {
-        let mut buf = [0u8; 3];
+        let mut buf = [0u8; 6];
         let n = self.tty.read(&mut buf)?;
         if n == 0 {
             return Ok(());
         }
 
+        // Escape sequences
         if buf[0] == 27 && n >= 3 && buf[1] == b'[' {
+            // Shift+arrow: ESC [ 1 ; 2 A/B/C/D (6 bytes)
+            if n >= 6 && buf[2] == b'1' && buf[3] == b';' && buf[4] == b'2' {
+                match buf[5] {
+                    b'A' => self.scroll_up(),
+                    b'B' => self.scroll_down(),
+                    b'C' => self.scroll_right(),
+                    b'D' => self.scroll_left(),
+                    _ => {}
+                }
+                return Ok(());
+            }
+            // Plain arrow: ESC [ A/B/C/D (3 bytes)
             match buf[2] {
-                b'A' => self.scroll_up(),
-                b'B' => self.scroll_down(),
-                b'C' => self.scroll_right(),
-                b'D' => self.scroll_left(),
+                b'A' => self.focus_direction(Dir::Up),
+                b'B' => self.focus_direction(Dir::Down),
+                b'C' => self.focus_direction(Dir::Right),
+                b'D' => self.focus_direction(Dir::Left),
                 _ => {}
             }
             return Ok(());
@@ -73,13 +87,10 @@ impl App {
             b'd' => self.navigate_next(),
             b's' | b' ' => self.try_split(),
             b'S' => self.split_focused(None),
-            b'v' => self.split_focused(Some(Direction::Horizontal)), // vertical line → left|right
-            b'h' => self.split_focused(Some(Direction::Vertical)),   // horizontal line → top/bottom
+            b'v' => self.split_focused(Some(Direction::Horizontal)),
+            b'h' => self.split_focused(Some(Direction::Vertical)),
             b'\t' => self.tree.cycle_focus(),
             b'w' => self.close_pane(),
-            b'j' => self.focus_direction(Dir::Down),
-            b'k' => self.focus_direction(Dir::Up),
-            b'l' => self.focus_direction(Dir::Right),
             b'0'..=b'9' => self.focus_by_index((buf[0] - b'0') as usize),
             _ => {}
         }
@@ -243,6 +254,7 @@ impl App {
 
             // Check if candidate is in the correct direction
             let in_dir = match dir {
+                Dir::Left => dx < 0,
                 Dir::Right => dx > 0,
                 Dir::Up => dy < 0,
                 Dir::Down => dy > 0,
@@ -254,7 +266,7 @@ impl App {
             // Distance: weight perpendicular axis more so we prefer
             // panes that are aligned on the primary axis
             let cost = match dir {
-                Dir::Right => dx.abs() + dy.abs() * 3,
+                Dir::Left | Dir::Right => dx.abs() + dy.abs() * 3,
                 Dir::Up | Dir::Down => dy.abs() + dx.abs() * 3,
             };
 
