@@ -17,6 +17,8 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Allow manual edits to the release workflow
+allow-dirty = ["ci"]
 
 # Publish Homebrew formula to a tap repo
 [dist.github-custom-runners]
