@@ -2,6 +2,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use similar::{ChangeTag, TextDiff};
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, ThemeSet},
@@ -9,6 +10,11 @@ use syntect::{
 };
 
 use crate::diff::{DiffLine, FileDiff, LineKind};
+
+const EMPHASIS_ADD_FG: Color = Color::Rgb(180, 255, 180);
+const EMPHASIS_ADD_BG: Color = Color::Rgb(0, 80, 0);
+const EMPHASIS_DEL_FG: Color = Color::Rgb(255, 180, 180);
+const EMPHASIS_DEL_BG: Color = Color::Rgb(80, 0, 0);
 
 pub struct Highlighter {
     syntax_set: SyntaxSet,
@@ -23,7 +29,6 @@ impl Highlighter {
         }
     }
 
-    /// Pre-compute styled lines for a file diff using syntax highlighting.
     pub fn highlight_file(&self, file: &mut FileDiff) {
         let syntax = self
             .syntax_set
@@ -35,14 +40,93 @@ impl Highlighter {
         let theme = &self.theme_set.themes["base16-ocean.dark"];
         let mut h = HighlightLines::new(syntax, theme);
 
-        file.styled_lines = file
-            .lines
-            .iter()
-            .map(|dl| self.style_line(dl, &mut h))
-            .collect();
+        let lines = &file.lines;
+        let mut styled: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+        let mut i = 0;
+
+        while i < lines.len() {
+            // Detect consecutive remove→add pairs for intra-line diff
+            let remove_start = i;
+            while i < lines.len() && lines[i].kind == LineKind::Remove {
+                i += 1;
+            }
+            let remove_end = i;
+
+            let add_start = i;
+            while i < lines.len() && lines[i].kind == LineKind::Add {
+                i += 1;
+            }
+            let add_end = i;
+
+            let n_removes = remove_end - remove_start;
+            let n_adds = add_end - add_start;
+
+            if n_removes > 0 && n_adds > 0 {
+                let pairs = n_removes.min(n_adds);
+
+                // Collect paired styled lines separately to maintain order
+                let mut rem_lines: Vec<Line<'static>> = Vec::with_capacity(n_removes);
+                let mut add_lines: Vec<Line<'static>> = Vec::with_capacity(n_adds);
+
+                for j in 0..pairs {
+                    let (rl, al) = self.style_pair(
+                        &lines[remove_start + j],
+                        &lines[add_start + j],
+                        &mut h,
+                    );
+                    rem_lines.push(rl);
+                    add_lines.push(al);
+                }
+                for j in pairs..n_removes {
+                    rem_lines.push(self.style_line(&lines[remove_start + j], &mut h, &[]));
+                }
+                for j in pairs..n_adds {
+                    add_lines.push(self.style_line(&lines[add_start + j], &mut h, &[]));
+                }
+
+                // Push in original order: all removes then all adds
+                styled.extend(rem_lines);
+                styled.extend(add_lines);
+            } else {
+                for j in remove_start..remove_end {
+                    styled.push(self.style_line(&lines[j], &mut h, &[]));
+                }
+                for j in add_start..add_end {
+                    styled.push(self.style_line(&lines[j], &mut h, &[]));
+                }
+            }
+
+            // Non-remove, non-add line (context, hunk header)
+            if i == remove_start {
+                styled.push(self.style_line(&lines[i], &mut h, &[]));
+                i += 1;
+            }
+        }
+
+        file.styled_lines = styled;
     }
 
-    fn style_line(&self, dl: &DiffLine, h: &mut HighlightLines) -> Line<'static> {
+    fn style_pair(
+        &self,
+        rem: &DiffLine,
+        add: &DiffLine,
+        h: &mut HighlightLines,
+    ) -> (Line<'static>, Line<'static>) {
+        let diff = TextDiff::from_words(&rem.content, &add.content);
+        let rem_emphasis = build_emphasis_mask(&rem.content, &diff, true);
+        let add_emphasis = build_emphasis_mask(&add.content, &diff, false);
+
+        let rem_line = self.style_line(rem, h, &rem_emphasis);
+        let add_line = self.style_line(add, h, &add_emphasis);
+        (rem_line, add_line)
+    }
+
+    fn style_line(
+        &self,
+        dl: &DiffLine,
+        h: &mut HighlightLines,
+        emphasis: &[bool],
+    ) -> Line<'static> {
         if dl.kind == LineKind::HunkHeader {
             return Line::from(Span::styled(
                 dl.content.clone(),
@@ -65,41 +149,106 @@ impl Highlighter {
 
         let mut spans = vec![Span::styled(prefix, prefix_style)];
 
-        // Feed content to syntect for highlighting
-        let line_for_highlight = format!("{}\n", &dl.content);
-        let regions = h
-            .highlight_line(&line_for_highlight, &self.syntax_set)
-            .unwrap_or_default();
-
-        let diff_fg = match dl.kind {
-            LineKind::Add => Some(Color::Green),
-            LineKind::Remove => Some(Color::Red),
-            _ => None,
+        let (base_fg, emph_fg, emph_bg) = match dl.kind {
+            LineKind::Add => (Color::Green, EMPHASIS_ADD_FG, EMPHASIS_ADD_BG),
+            LineKind::Remove => (Color::Red, EMPHASIS_DEL_FG, EMPHASIS_DEL_BG),
+            _ => (Color::White, Color::White, Color::Reset),
         };
 
-        for (style, text) in regions {
-            let text = text.trim_end_matches('\n').to_string();
-            if text.is_empty() {
-                continue;
-            }
+        if emphasis.is_empty() || dl.kind == LineKind::Context {
+            // No intra-line diff — use syntect coloring
+            let line_for_highlight = format!("{}\n", &dl.content);
+            let regions = h
+                .highlight_line(&line_for_highlight, &self.syntax_set)
+                .unwrap_or_default();
 
-            let fg = diff_fg.unwrap_or_else(|| {
-                Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b)
-            });
+            let is_diff_line = dl.kind == LineKind::Add || dl.kind == LineKind::Remove;
 
-            let mut ratatui_style = Style::default().fg(fg);
-            if style.font_style.contains(FontStyle::BOLD) {
-                ratatui_style = ratatui_style.add_modifier(Modifier::BOLD);
+            for (style, text) in regions {
+                let text = text.trim_end_matches('\n').to_string();
+                if text.is_empty() {
+                    continue;
+                }
+                let fg = if is_diff_line {
+                    base_fg
+                } else {
+                    Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b)
+                };
+                let mut s = Style::default().fg(fg);
+                if style.font_style.contains(FontStyle::BOLD) {
+                    s = s.add_modifier(Modifier::BOLD);
+                }
+                if style.font_style.contains(FontStyle::ITALIC) {
+                    s = s.add_modifier(Modifier::ITALIC);
+                }
+                spans.push(Span::styled(text, s));
             }
-            if style.font_style.contains(FontStyle::ITALIC) {
-                ratatui_style = ratatui_style.add_modifier(Modifier::ITALIC);
-            }
+        } else {
+            // Intra-line diff — feed syntect for state tracking, render with emphasis
+            let _ = h.highlight_line(&format!("{}\n", &dl.content), &self.syntax_set);
 
-            spans.push(Span::styled(text, ratatui_style));
+            let chars: Vec<char> = dl.content.chars().collect();
+            let mut ci = 0;
+
+            while ci < chars.len() {
+                let is_emph = emphasis.get(ci).copied().unwrap_or(false);
+                let start = ci;
+                while ci < chars.len()
+                    && emphasis.get(ci).copied().unwrap_or(false) == is_emph
+                {
+                    ci += 1;
+                }
+                let chunk: String = chars[start..ci].iter().collect();
+                let style = if is_emph {
+                    Style::default()
+                        .fg(emph_fg)
+                        .bg(emph_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(base_fg)
+                };
+                spans.push(Span::styled(chunk, style));
+            }
         }
 
         Line::from(spans)
     }
+}
+
+/// Build a per-character boolean mask: true = this character was changed.
+fn build_emphasis_mask<'a>(
+    content: &'a str,
+    diff: &TextDiff<'a, 'a, 'a, str>,
+    is_old: bool,
+) -> Vec<bool> {
+    let mut mask = vec![false; content.len()];
+    let mut byte_pos = 0;
+
+    for change in diff.iter_all_changes() {
+        let value = change.value();
+        let dominated = match change.tag() {
+            ChangeTag::Equal => {
+                byte_pos += value.len();
+                continue;
+            }
+            ChangeTag::Delete => is_old,
+            ChangeTag::Insert => !is_old,
+        };
+
+        if dominated {
+            let end = (byte_pos + value.len()).min(mask.len());
+            for b in &mut mask[byte_pos..end] {
+                *b = true;
+            }
+            byte_pos += value.len();
+        }
+    }
+
+    // Convert byte mask to char mask
+    content
+        .char_indices()
+        .map(|(byte_idx, _)| mask.get(byte_idx).copied().unwrap_or(false))
+        .collect()
 }
 
 fn build_prefix(dl: &DiffLine) -> String {

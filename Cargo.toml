@@ -8,6 +8,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 color-eyre = "0.6"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
+similar = "2"
 libc = "0.2"
 
 [profile.release]
