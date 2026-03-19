@@ -18,7 +18,6 @@ const MIN_SPLIT_DIM: u16 = 50;
 enum Dir {
     Up,
     Down,
-    Left,
     Right,
 }
 
@@ -73,12 +72,13 @@ impl App {
             b'a' => self.navigate_prev(),
             b'd' => self.navigate_next(),
             b's' | b' ' => self.try_split(),
-            b'S' => self.split_focused(),
+            b'S' => self.split_focused(None),
+            b'v' => self.split_focused(Some(Direction::Horizontal)), // vertical line → left|right
+            b'h' => self.split_focused(Some(Direction::Vertical)),   // horizontal line → top/bottom
             b'\t' => self.tree.cycle_focus(),
             b'w' => self.close_pane(),
             b'j' => self.focus_direction(Dir::Down),
             b'k' => self.focus_direction(Dir::Up),
-            b'h' => self.focus_direction(Dir::Left),
             b'l' => self.focus_direction(Dir::Right),
             b'0'..=b'9' => self.focus_by_index((buf[0] - b'0') as usize),
             _ => {}
@@ -179,8 +179,8 @@ impl App {
         // All panes too small — noop
     }
 
-    /// Shift+S: split the currently focused pane, bypassing the BFS queue.
-    fn split_focused(&mut self) {
+    /// Split the focused pane. If `dir` is None, auto-detect from aspect ratio.
+    fn split_focused(&mut self, dir: Option<Direction>) {
         let needed = self.tree.leaf_count + 1;
         if self.window_start + needed > self.files.len() {
             return;
@@ -196,15 +196,13 @@ impl App {
             return;
         }
 
-        let direction = split_direction(rect);
+        let direction = dir.unwrap_or_else(|| split_direction(rect));
         let (child_a, child_b) = self.tree.split_leaf(target_id, direction);
 
-        // Remove the old target from the BFS queue if present, add children
         self.split_queue.retain(|&id| id != target_id);
         self.split_queue.push_back(child_a);
         self.split_queue.push_back(child_b);
 
-        // Focus stays on child_a (same content as before)
         self.tree.focused = child_a;
     }
 
@@ -245,7 +243,6 @@ impl App {
 
             // Check if candidate is in the correct direction
             let in_dir = match dir {
-                Dir::Left => dx < 0,
                 Dir::Right => dx > 0,
                 Dir::Up => dy < 0,
                 Dir::Down => dy > 0,
@@ -257,7 +254,7 @@ impl App {
             // Distance: weight perpendicular axis more so we prefer
             // panes that are aligned on the primary axis
             let cost = match dir {
-                Dir::Left | Dir::Right => dx.abs() + dy.abs() * 3,
+                Dir::Right => dx.abs() + dy.abs() * 3,
                 Dir::Up | Dir::Down => dy.abs() + dx.abs() * 3,
             };
 
