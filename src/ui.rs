@@ -49,8 +49,7 @@ pub fn render_pane(
         return;
     }
 
-    let lines: Vec<Line> = file.styled_lines.iter().cloned().collect();
-    let paragraph = Paragraph::new(lines).scroll((scroll_y, scroll_x));
+    let paragraph = Paragraph::new(file.styled_lines.clone()).scroll((scroll_y, scroll_x));
     f.render_widget(paragraph, inner);
 }
 

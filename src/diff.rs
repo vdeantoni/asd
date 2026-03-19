@@ -1,5 +1,3 @@
-use std::fmt;
-
 use ratatui::text::Line;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -8,17 +6,6 @@ pub enum LineKind {
     Remove,
     Context,
     HunkHeader,
-}
-
-impl fmt::Display for LineKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LineKind::Add => write!(f, "+"),
-            LineKind::Remove => write!(f, "-"),
-            LineKind::Context => write!(f, " "),
-            LineKind::HunkHeader => write!(f, "@"),
-        }
-    }
 }
 
 pub struct DiffLine {

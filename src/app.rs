@@ -161,16 +161,7 @@ impl App {
             // Split it!
             self.split_queue.pop_front();
 
-            // Account for terminal cell aspect ratio (~2:1 height:width)
-            // so we compare visual proportions, not raw character counts
-            let visual_height = rect.height as u32 * 2;
-            let visual_width = rect.width as u32;
-            let direction = if visual_height >= visual_width {
-                Direction::Vertical   // horizontal cut → top/bottom
-            } else {
-                Direction::Horizontal // vertical cut → left|right
-            };
-
+            let direction = split_direction(rect);
             let (child_a, child_b) = self.tree.split_leaf(target_id, direction);
 
             self.split_queue.push_back(child_a);
@@ -205,15 +196,7 @@ impl App {
             return;
         }
 
-        // Account for terminal cell aspect ratio (~2:1 height:width)
-        let visual_height = rect.height as u32 * 2;
-        let visual_width = rect.width as u32;
-        let direction = if visual_height >= visual_width {
-            Direction::Vertical   // horizontal cut → top/bottom
-        } else {
-            Direction::Horizontal // vertical cut → left|right
-        };
-
+        let direction = split_direction(rect);
         let (child_a, child_b) = self.tree.split_leaf(target_id, direction);
 
         // Remove the old target from the BFS queue if present, add children
@@ -360,6 +343,18 @@ impl App {
                 self.render_node(f, b, chunks[1]);
             }
         }
+    }
+}
+
+/// Determine split direction based on visual aspect ratio.
+/// Accounts for terminal cell aspect ratio (~2:1 height:width).
+fn split_direction(rect: Rect) -> Direction {
+    let visual_height = rect.height as u32 * 2;
+    let visual_width = rect.width as u32;
+    if visual_height >= visual_width {
+        Direction::Vertical   // horizontal cut → top/bottom
+    } else {
+        Direction::Horizontal // vertical cut → left|right
     }
 }
 

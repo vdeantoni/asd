@@ -42,13 +42,13 @@ fn main() -> color_eyre::Result<()> {
     // Enable raw mode on the tty so we get individual keypresses
     let tty_fd = tty.as_raw_fd();
     let mut original_termios: libc::termios = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::tcgetattr(tty_fd, &mut original_termios);
+    if unsafe { libc::tcgetattr(tty_fd, &mut original_termios) } != 0 {
+        color_eyre::eyre::bail!("Failed to get terminal attributes");
     }
     let mut raw = original_termios;
-    unsafe {
-        libc::cfmakeraw(&mut raw);
-        libc::tcsetattr(tty_fd, libc::TCSANOW, &raw);
+    unsafe { libc::cfmakeraw(&mut raw) };
+    if unsafe { libc::tcsetattr(tty_fd, libc::TCSANOW, &raw) } != 0 {
+        color_eyre::eyre::bail!("Failed to set raw mode");
     }
 
     // Set up ratatui with stdout (which is still the terminal)

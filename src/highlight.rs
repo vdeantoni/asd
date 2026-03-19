@@ -83,13 +83,9 @@ impl Highlighter {
                 continue;
             }
 
-            let fg = if diff_fg.is_some() {
-                // For add/remove lines, blend: use syntect color but dim it,
-                // then overlay diff color for the main tone
-                diff_fg.unwrap()
-            } else {
+            let fg = diff_fg.unwrap_or_else(|| {
                 Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b)
-            };
+            });
 
             let mut ratatui_style = Style::default().fg(fg);
             if style.font_style.contains(FontStyle::BOLD) {
