@@ -182,3 +182,189 @@ impl SplitTree {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Direction;
+
+    fn assert_slots_sequential(tree: &SplitTree) {
+        for (i, &leaf_id) in tree.collect_leaves(tree.root).iter().enumerate() {
+            if let SplitNode::Leaf { slot, .. } = &tree.nodes[leaf_id] {
+                assert_eq!(*slot, i, "leaf {leaf_id} has wrong slot");
+            }
+        }
+    }
+
+    #[test]
+    fn new_tree_single_leaf() {
+        let tree = SplitTree::new();
+        assert_eq!(tree.root, 0);
+        assert_eq!(tree.focused, 0);
+        assert_eq!(tree.leaf_count, 1);
+        assert!(matches!(tree.nodes[0], SplitNode::Leaf { slot: 0, .. }));
+    }
+
+    #[test]
+    fn split_leaf_creates_children() {
+        let mut tree = SplitTree::new();
+        let (a, b) = tree.split_leaf(0, Direction::Horizontal);
+
+        assert_eq!(tree.leaf_count, 2);
+        assert!(matches!(tree.nodes[0], SplitNode::Split { .. }));
+        assert!(matches!(tree.nodes[a], SplitNode::Leaf { .. }));
+        assert!(matches!(tree.nodes[b], SplitNode::Leaf { .. }));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn split_returns_correct_child_ids() {
+        let mut tree = SplitTree::new();
+        let (a, b) = tree.split_leaf(0, Direction::Vertical);
+
+        // a should keep the original slot, b gets the new one
+        if let SplitNode::Split {
+            a: sa, b: sb, ..
+        } = &tree.nodes[0]
+        {
+            assert_eq!(*sa, a);
+            assert_eq!(*sb, b);
+        } else {
+            panic!("root should be a Split node after split_leaf");
+        }
+    }
+
+    #[test]
+    fn split_reassigns_slots() {
+        let mut tree = SplitTree::new();
+        tree.split_leaf(0, Direction::Horizontal);
+        assert_slots_sequential(&tree);
+    }
+
+    #[test]
+    fn close_focused_decrements_leaf_count() {
+        let mut tree = SplitTree::new();
+        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = b;
+
+        assert!(tree.close_focused());
+        assert_eq!(tree.leaf_count, 1);
+    }
+
+    #[test]
+    fn close_focused_reassigns_slots() {
+        let mut tree = SplitTree::new();
+        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = b;
+        tree.close_focused();
+
+        let leaves = tree.collect_leaves(tree.root);
+        assert_eq!(leaves.len(), 1);
+        assert_slots_sequential(&tree);
+    }
+
+    #[test]
+    fn close_single_pane_returns_false() {
+        let mut tree = SplitTree::new();
+        assert!(!tree.close_focused());
+    }
+
+    #[test]
+    fn cycle_focus_wraps_around() {
+        let mut tree = SplitTree::new();
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = a;
+
+        let leaves = tree.collect_leaves(tree.root);
+        assert_eq!(leaves.len(), 2);
+
+        // Cycle through all leaves and back
+        let start = tree.focused;
+        let mut visited = vec![start];
+        for _ in 0..leaves.len() {
+            tree.cycle_focus();
+            visited.push(tree.focused);
+        }
+
+        // Should visit all leaves and wrap back to start
+        assert_eq!(visited.last(), Some(&start));
+        // The intermediate visits should cover all leaves
+        let unique: std::collections::HashSet<_> = visited.iter().collect();
+        assert_eq!(unique.len(), leaves.len());
+    }
+
+    #[test]
+    fn collect_leaves_correct_order() {
+        let mut tree = SplitTree::new();
+        // Split root into two
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        // Split left child into two more
+        tree.split_leaf(a, Direction::Vertical);
+
+        let leaves = tree.collect_leaves(tree.root);
+        assert_eq!(leaves.len(), 3);
+        assert_eq!(tree.leaf_count, 3);
+        assert_slots_sequential(&tree);
+    }
+
+    #[test]
+    fn scroll_y_updates_and_clamps() {
+        let mut tree = SplitTree::new();
+
+        tree.scroll_y(5, 100);
+        if let SplitNode::Leaf { scroll_y, .. } = &tree.nodes[tree.focused] {
+            assert_eq!(*scroll_y, 5);
+        }
+
+        // Clamp at max
+        tree.scroll_y(200, 100);
+        if let SplitNode::Leaf { scroll_y, .. } = &tree.nodes[tree.focused] {
+            assert_eq!(*scroll_y, 100);
+        }
+
+        // Clamp at zero (negative)
+        tree.scroll_y(-500, 100);
+        if let SplitNode::Leaf { scroll_y, .. } = &tree.nodes[tree.focused] {
+            assert_eq!(*scroll_y, 0);
+        }
+    }
+
+    #[test]
+    fn scroll_x_updates_and_clamps_at_zero() {
+        let mut tree = SplitTree::new();
+
+        tree.scroll_x(10);
+        if let SplitNode::Leaf { scroll_x, .. } = &tree.nodes[tree.focused] {
+            assert_eq!(*scroll_x, 10);
+        }
+
+        // Clamp at zero
+        tree.scroll_x(-500);
+        if let SplitNode::Leaf { scroll_x, .. } = &tree.nodes[tree.focused] {
+            assert_eq!(*scroll_x, 0);
+        }
+    }
+
+    #[test]
+    fn reset_all_scroll_clears_leaves() {
+        let mut tree = SplitTree::new();
+        tree.split_leaf(0, Direction::Horizontal);
+
+        // Scroll all leaves
+        let leaves = tree.collect_leaves(tree.root);
+        for &leaf_id in &leaves {
+            tree.focused = leaf_id;
+            tree.scroll_y(10, 100);
+            tree.scroll_x(5);
+        }
+
+        tree.reset_all_scroll();
+
+        for &leaf_id in &tree.collect_leaves(tree.root) {
+            if let SplitNode::Leaf { scroll_y, scroll_x, .. } = &tree.nodes[leaf_id] {
+                assert_eq!(*scroll_y, 0);
+                assert_eq!(*scroll_x, 0);
+            }
+        }
+    }
+}

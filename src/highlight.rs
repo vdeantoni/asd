@@ -216,7 +216,7 @@ impl Highlighter {
 }
 
 /// Build a per-character boolean mask: true = this character was changed.
-fn build_emphasis_mask<'a>(
+pub(crate) fn build_emphasis_mask<'a>(
     content: &'a str,
     diff: &TextDiff<'a, 'a, 'a, str>,
     is_old: bool,
@@ -267,4 +267,107 @@ fn build_prefix(dl: &DiffLine) -> String {
         LineKind::HunkHeader => "@",
     };
     format!("{} {} {} ", old, new, prefix_char)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mask(old: &str, new: &str, is_old: bool) -> Vec<bool> {
+        let diff = TextDiff::from_words(old, new);
+        build_emphasis_mask(if is_old { old } else { new }, &diff, is_old)
+    }
+
+    #[test]
+    fn equal_strings_all_false() {
+        let m = mask("hello world", "hello world", true);
+        assert!(m.iter().all(|&b| !b));
+
+        let m = mask("hello world", "hello world", false);
+        assert!(m.iter().all(|&b| !b));
+    }
+
+    #[test]
+    fn single_word_change() {
+        // "hello world" → "hello rust"
+        // On the old side, "world" should be marked
+        let old = "hello world";
+        let new = "hello rust";
+
+        let old_mask = mask(old, new, true);
+        // "hello " = indices 0..5 should be false, "world" = 6..10 should be true
+        assert!(!old_mask[0]); // 'h'
+        assert!(!old_mask[5]); // ' '
+        assert!(old_mask[6]); // 'w'
+        assert!(old_mask[10]); // 'd'
+
+        let new_mask = mask(old, new, false);
+        assert!(!new_mask[0]); // 'h'
+        assert!(!new_mask[5]); // ' '
+        assert!(new_mask[6]); // 'r'
+        assert!(new_mask[9]); // 't'
+    }
+
+    #[test]
+    fn insertion_marks_new_side() {
+        // Word-level diff: "a b" → "a inserted b"
+        // "a" and "b" are equal, "inserted " is inserted
+        let old = "a b";
+        let new = "a inserted b";
+
+        let old_mask = mask(old, new, true);
+        // Old side: nothing was deleted, all false
+        assert!(old_mask.iter().all(|&b| !b));
+
+        let new_mask = mask(old, new, false);
+        // "a " unchanged, "inserted " marked, "b" unchanged
+        assert!(!new_mask[0]); // 'a'
+        assert!(new_mask[2]); // 'i' in "inserted"
+        assert!(new_mask[9]); // 'd' in "inserted"
+        assert!(!new_mask[11]); // 'b'
+    }
+
+    #[test]
+    fn deletion_marks_old_side() {
+        // Word-level diff: "a deleted b" → "a b"
+        let old = "a deleted b";
+        let new = "a b";
+
+        let old_mask = mask(old, new, true);
+        // "a " unchanged, "deleted " marked, "b" unchanged
+        assert!(!old_mask[0]); // 'a'
+        assert!(old_mask[2]); // 'd' in "deleted"
+        assert!(old_mask[8]); // ' ' after "deleted"
+        assert!(!old_mask[10]); // 'b'
+
+        let new_mask = mask(old, new, false);
+        // New side: nothing was inserted, all false
+        assert!(new_mask.iter().all(|&b| !b));
+    }
+
+    #[test]
+    fn multi_word_changes() {
+        let old = "the quick brown fox";
+        let new = "the slow brown dog";
+
+        let old_mask = mask(old, new, true);
+        let new_mask = mask(old, new, false);
+
+        // "the " and " brown " should not be emphasized
+        assert!(!old_mask[0]); // 't'
+        assert!(!old_mask[1]); // 'h'
+        assert!(!old_mask[2]); // 'e'
+
+        // "quick" (indices 4..8) should be emphasized on old side
+        assert!(old_mask[4]); // 'q'
+
+        // "fox" (indices 16..18) should be emphasized on old side
+        assert!(old_mask[16]); // 'f'
+
+        // "slow" should be emphasized on new side
+        assert!(new_mask[4]); // 's'
+
+        // "dog" should be emphasized on new side
+        assert!(new_mask[16]); // 'd'
+    }
 }
