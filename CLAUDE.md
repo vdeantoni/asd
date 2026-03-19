@@ -20,9 +20,10 @@ src/
 ### Key Design Decisions
 
 - **Stdin before TUI**: All piped input is read into a String, then `/dev/tty` is opened for keyboard input via raw `libc` calls (not crossterm's event system, which conflicts with piped stdin on macOS)
-- **Arena-based split tree**: Nodes stored in `Vec<SplitNode>` with integer indices. Avoids Box-based borrow checker pain. Splitting overwrites a Leaf with a Split node in-place.
+- **Arena-based split tree**: Nodes stored in `Vec<SplitNode>` with integer indices. Avoids Box-based borrow checker pain. Splitting overwrites a Leaf with a Split node in-place. Each Split stores a `ratio` (default 50%) for resizable panes.
 - **Visible indices abstraction**: Hidden files are tracked with a `hidden` flag on `FileDiff`. Slots index into `visible_indices()`, not the raw files Vec.
 - **BFS split rotation**: `split_queue: VecDeque<NodeId>` tracks which pane to split next. Each split enqueues both children for future splits.
+- **Split history**: `split_history: Vec<NodeId>` tracks which nodes were split, enabling undo with `m`.
 - **Pre-computed styling**: Syntax highlighting and word-level diff emphasis are computed once at startup and stored as `Vec<Line<'static>>`. Zero per-frame highlighting cost.
 - **Terminal cell aspect ratio**: Split direction accounts for the ~2:1 height:width ratio of terminal characters (`height * 2` vs `width`).
 
@@ -50,7 +51,7 @@ git diff | ./target/release/asd
 ## Dependencies
 
 - `ratatui` + `crossterm` — TUI framework and terminal backend
-- `syntect` — Syntax highlighting (Sublime Text engine)
+- `syntect` + `two-face` — Syntax highlighting with 250+ language support (bat's syntax definitions)
 - `similar` — Word-level diffing for intra-line emphasis
 - `libc` — Raw terminal control (tcgetattr/tcsetattr, /dev/tty)
 - `color-eyre` — Error handling
