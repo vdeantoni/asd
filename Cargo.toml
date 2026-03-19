@@ -2,7 +2,7 @@
 name = "asd"
 version = "0.2.0"
 edition = "2021"
-description = "A terminal-based side-by-side diff viewer with syntax highlighting"
+description = "A blazing-fast terminal diff viewer with split panes, syntax highlighting, and word-level change detection"
 license = "MIT"
 repository = "https://github.com/vdeantoni/asd"
 readme = "README.md"
