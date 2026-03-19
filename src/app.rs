@@ -1,13 +1,14 @@
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read, Write};
+use std::process::Command;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
 
-use crate::diff::FileDiff;
+use crate::diff::{FileDiff, LineKind};
 use crate::layout::{NodeId, SplitNode, SplitTree};
 use crate::ui;
 
@@ -27,7 +28,10 @@ pub struct App {
     pub tree: SplitTree,
     pub window_start: usize,
     pub should_quit: bool,
+    pub needs_clear: bool,
     tty: File,
+    tty_fd: i32,
+    original_termios: libc::termios,
     split_queue: VecDeque<NodeId>,
     split_history: Vec<NodeId>,
     leaf_rects: Vec<(NodeId, Rect)>,
@@ -37,13 +41,16 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(files: Vec<FileDiff>, tty: File) -> Self {
+    pub fn new(files: Vec<FileDiff>, tty: File, tty_fd: i32, original_termios: libc::termios) -> Self {
         Self {
             files,
             tree: SplitTree::new(),
             window_start: 0,
             should_quit: false,
+            needs_clear: false,
             tty,
+            tty_fd,
+            original_termios,
             split_queue: VecDeque::from([0]),
             split_history: Vec::new(),
             leaf_rects: Vec::new(),
@@ -120,6 +127,10 @@ impl App {
             b'M' => self.merge_focused(),
             b' ' => self.scroll_page_down(),
             b'x' => self.hide_focused_file(),
+            b'c' => self.copy_focused_diff(),
+            b'o' => self.open_in_editor()?,
+            b'-' => { self.tree.resize_focused(-5); }
+            b'=' => { self.tree.resize_focused(5); }
             b'r' => self.reset(),
             b'f' => {
                 self.show_file_list = true;
@@ -284,17 +295,91 @@ impl App {
         self.tree.scroll_x(-4);
     }
 
-    fn focused_file_line_count(&self) -> usize {
+    fn focused_file(&self) -> Option<&FileDiff> {
         if let SplitNode::Leaf { slot, .. } = &self.tree.nodes[self.tree.focused] {
-            if let Some(file_index) = self.file_index_for_slot(*slot) {
-                return self.files[file_index].styled_lines.len();
-            }
+            self.file_index_for_slot(*slot).map(|i| &self.files[i])
+        } else {
+            None
         }
-        0
+    }
+
+    fn focused_file_line_count(&self) -> usize {
+        self.focused_file()
+            .map(|f| f.styled_lines.len())
+            .unwrap_or(0)
     }
 
     fn focused_pane_height(&self) -> u16 {
         self.rect_for(self.tree.focused).height.saturating_sub(2) // subtract border
+    }
+
+    fn copy_focused_diff(&self) {
+        let file = match self.focused_file() {
+            Some(f) => f,
+            None => return,
+        };
+
+        let mut text = String::new();
+        for line in &file.lines {
+            let prefix = match line.kind {
+                LineKind::Add => "+",
+                LineKind::Remove => "-",
+                LineKind::Context => " ",
+                LineKind::HunkHeader => "",
+            };
+            text.push_str(prefix);
+            text.push_str(&line.content);
+            text.push('\n');
+        }
+
+        if let Ok(mut child) = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+
+    fn open_in_editor(&mut self) -> color_eyre::Result<()> {
+        let filename = match self.focused_file() {
+            Some(f) => f.filename.clone(),
+            None => return Ok(()),
+        };
+
+        if !std::path::Path::new(&filename).exists() {
+            return Ok(());
+        }
+
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+        // Leave alternate screen and restore cooked mode
+        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+        unsafe {
+            libc::tcsetattr(self.tty_fd, libc::TCSANOW, &self.original_termios);
+        }
+
+        // Spawn editor with /dev/tty as stdin (our stdin may be a consumed pipe)
+        let tty_for_editor = std::fs::File::open("/dev/tty")?;
+        let parts: Vec<&str> = editor.split_whitespace().collect();
+        let _ = Command::new(parts[0])
+            .args(&parts[1..])
+            .arg(&filename)
+            .stdin(tty_for_editor)
+            .status();
+
+        // Re-enter raw mode and alternate screen
+        let mut raw = self.original_termios;
+        unsafe {
+            libc::cfmakeraw(&mut raw);
+            libc::tcsetattr(self.tty_fd, libc::TCSANOW, &raw);
+        }
+        crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+
+        self.needs_clear = true;
+        Ok(())
     }
 
     fn try_split(&mut self) {
@@ -496,10 +581,11 @@ impl App {
                     );
                 }
             }
-            SplitNode::Split { direction, a, b } => {
+            SplitNode::Split { direction, a, b, ratio } => {
                 let direction = *direction;
                 let a = *a;
                 let b = *b;
+                let ratio = *ratio;
 
                 if !can_split_area(area, direction) {
                     self.render_node(f, a, area);
@@ -508,7 +594,10 @@ impl App {
 
                 let chunks = Layout::default()
                     .direction(direction)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .constraints([
+                        Constraint::Percentage(ratio),
+                        Constraint::Percentage(100 - ratio),
+                    ])
                     .split(area);
 
                 self.render_node(f, a, chunks[0]);

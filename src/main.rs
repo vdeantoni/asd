@@ -81,7 +81,7 @@ fn main() -> color_eyre::Result<()> {
     // Enter alternate screen
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
 
-    let mut app = App::new(files, tty);
+    let mut app = App::new(files, tty, tty_fd, original_termios);
     let result = run_loop(&mut terminal, &mut app);
 
     // Restore terminal
@@ -98,6 +98,11 @@ fn run_loop(
     app: &mut App,
 ) -> color_eyre::Result<()> {
     loop {
+        if app.needs_clear {
+            terminal.clear()?;
+            app.needs_clear = false;
+        }
+
         terminal.draw(|f| app.draw(f))?;
 
         app.handle_event()?;
@@ -127,6 +132,9 @@ fn print_help() {
     println!("    v / h            Vertical / horizontal split");
     println!("    m                Undo last split (merge)");
     println!("    M                Merge focused pane with sibling");
+    println!("    - / =            Shrink / grow focused pane");
+    println!("    c                Copy focused diff to clipboard");
+    println!("    o                Open file in $EDITOR");
     println!("    Space            Page down");
     println!("    x                Hide focused file");
     println!("    f                File list overlay");

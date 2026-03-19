@@ -12,6 +12,7 @@ pub enum SplitNode {
         direction: Direction,
         a: NodeId,
         b: NodeId,
+        ratio: u16,
     },
 }
 
@@ -60,6 +61,7 @@ impl SplitTree {
             direction,
             a: a_id,
             b: b_id,
+            ratio: 50,
         };
 
         // Don't change focus here — callers decide.
@@ -165,7 +167,7 @@ impl SplitTree {
         }
     }
 
-    fn find_parent(&self, target: NodeId) -> Option<NodeId> {
+    pub fn find_parent(&self, target: NodeId) -> Option<NodeId> {
         self.find_parent_rec(self.root, target)
     }
 
@@ -191,6 +193,18 @@ impl SplitTree {
         }
     }
 
+    fn subtree_contains(&self, root: NodeId, target: NodeId) -> bool {
+        if root == target {
+            return true;
+        }
+        match &self.nodes[root] {
+            SplitNode::Leaf { .. } => false,
+            SplitNode::Split { a, b, .. } => {
+                self.subtree_contains(*a, target) || self.subtree_contains(*b, target)
+            }
+        }
+    }
+
     pub fn scroll_y(&mut self, delta: i16, max_lines: u16) {
         if let SplitNode::Leaf { scroll_y, .. } = &mut self.nodes[self.focused] {
             let new = (*scroll_y as i16 + delta).max(0) as u16;
@@ -211,6 +225,35 @@ impl SplitTree {
                 *scroll_x = 0;
             }
         }
+    }
+
+    /// Adjust the ratio of the parent split so the focused pane grows or shrinks.
+    /// Positive delta grows the focused pane, negative shrinks it.
+    pub fn resize_focused(&mut self, delta: i16) -> bool {
+        let parent_id = match self.find_parent(self.focused) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let (a, ratio) = match &self.nodes[parent_id] {
+            SplitNode::Split { a, ratio, .. } => (*a, *ratio),
+            _ => return false,
+        };
+
+        let focused_is_a = self.subtree_contains(a, self.focused);
+
+        let effective_delta = if focused_is_a { delta } else { -delta };
+        let new_ratio = (ratio as i16 + effective_delta).clamp(10, 90) as u16;
+
+        if new_ratio == ratio {
+            return false;
+        }
+
+        if let SplitNode::Split { ratio, .. } = &mut self.nodes[parent_id] {
+            *ratio = new_ratio;
+        }
+
+        true
     }
 }
 
@@ -440,5 +483,62 @@ mod tests {
                 assert_eq!(*scroll_x, 0);
             }
         }
+    }
+
+    #[test]
+    fn resize_focused_grows_and_shrinks() {
+        let mut tree = SplitTree::new();
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = a;
+
+        assert!(tree.resize_focused(5));
+        if let SplitNode::Split { ratio, .. } = &tree.nodes[tree.root] {
+            assert_eq!(*ratio, 55);
+        }
+
+        assert!(tree.resize_focused(-10));
+        if let SplitNode::Split { ratio, .. } = &tree.nodes[tree.root] {
+            assert_eq!(*ratio, 45);
+        }
+    }
+
+    #[test]
+    fn resize_clamps_at_bounds() {
+        let mut tree = SplitTree::new();
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = a;
+
+        for _ in 0..20 {
+            tree.resize_focused(5);
+        }
+        if let SplitNode::Split { ratio, .. } = &tree.nodes[tree.root] {
+            assert_eq!(*ratio, 90);
+        }
+
+        for _ in 0..20 {
+            tree.resize_focused(-5);
+        }
+        if let SplitNode::Split { ratio, .. } = &tree.nodes[tree.root] {
+            assert_eq!(*ratio, 10);
+        }
+    }
+
+    #[test]
+    fn resize_focused_child_b() {
+        let mut tree = SplitTree::new();
+        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = b;
+
+        // Growing child_b decreases ratio (ratio is for child_a)
+        assert!(tree.resize_focused(5));
+        if let SplitNode::Split { ratio, .. } = &tree.nodes[tree.root] {
+            assert_eq!(*ratio, 45);
+        }
+    }
+
+    #[test]
+    fn resize_single_pane_is_noop() {
+        let mut tree = SplitTree::new();
+        assert!(!tree.resize_focused(5));
     }
 }
