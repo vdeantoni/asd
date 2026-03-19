@@ -5,6 +5,7 @@ mod highlight;
 mod layout;
 mod ui;
 
+use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, IsTerminal, Read};
 use std::os::unix::io::AsRawFd;
@@ -13,7 +14,29 @@ use app::App;
 use diff::parse_diff;
 use highlight::Highlighter;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn main() -> color_eyre::Result<()> {
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    if let Some(arg) = args.first() {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("asd {}", VERSION);
+                return Ok(());
+            }
+            "--help" | "-h" | "help" => {
+                print_help();
+                return Ok(());
+            }
+            other => {
+                eprintln!("Unknown option: {}", other);
+                eprintln!("Run 'asd --help' for usage.");
+                std::process::exit(1);
+            }
+        }
+    }
+
     color_eyre::install()?;
 
     let mut files = if io::stdin().is_terminal() {
@@ -83,4 +106,31 @@ fn run_loop(
             return Ok(());
         }
     }
+}
+
+fn print_help() {
+    println!("asd {} — terminal diff viewer", VERSION);
+    println!();
+    println!("USAGE:");
+    println!("    git diff | asd");
+    println!("    diff -u old.txt new.txt | asd");
+    println!("    asd                          (demo mode)");
+    println!();
+    println!("OPTIONS:");
+    println!("    -h, --help       Print this help message");
+    println!("    -V, --version    Print version");
+    println!();
+    println!("KEYBINDINGS:");
+    println!("    a / d            Previous / next file");
+    println!("    s                Auto-split (BFS rotation)");
+    println!("    S                Split focused pane (auto direction)");
+    println!("    v / h            Vertical / horizontal split");
+    println!("    w                Close focused pane");
+    println!("    Space            Hide focused file");
+    println!("    f                File list overlay");
+    println!("    r                Reset to initial state");
+    println!("    Tab / 0-9        Cycle / jump to pane");
+    println!("    Arrows           Focus pane in direction");
+    println!("    Shift+Arrows     Scroll");
+    println!("    q / Esc / Ctrl+C Quit");
 }
