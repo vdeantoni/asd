@@ -29,6 +29,7 @@ pub struct App {
     pub should_quit: bool,
     tty: File,
     split_queue: VecDeque<NodeId>,
+    split_history: Vec<NodeId>,
     leaf_rects: Vec<(NodeId, Rect)>,
     pane_counter: usize,
     pub show_file_list: bool,
@@ -44,6 +45,7 @@ impl App {
             should_quit: false,
             tty,
             split_queue: VecDeque::from([0]),
+            split_history: Vec::new(),
             leaf_rects: Vec::new(),
             pane_counter: 0,
             show_file_list: false,
@@ -114,8 +116,10 @@ impl App {
             b'v' => self.split_focused(Some(Direction::Horizontal)),
             b'h' => self.split_focused(Some(Direction::Vertical)),
             b'\t' => self.tree.cycle_focus(),
-            b'w' => self.close_pane(),
-            b' ' => self.hide_focused_file(),
+            b'm' => self.undo_last_split(),
+            b'M' => self.merge_focused(),
+            b' ' => self.scroll_page_down(),
+            b'x' => self.hide_focused_file(),
             b'r' => self.reset(),
             b'f' => {
                 self.show_file_list = true;
@@ -170,7 +174,7 @@ impl App {
 
         match buf[0] {
             b'f' | 27 => self.show_file_list = false,
-            b' ' => {
+            b'x' => {
                 // Toggle hidden
                 if self.file_list_cursor < self.files.len() {
                     let was_hidden = self.files[self.file_list_cursor].hidden;
@@ -236,6 +240,7 @@ impl App {
         self.window_start = 0;
         self.tree = SplitTree::new();
         self.split_queue = VecDeque::from([self.tree.root]);
+        self.split_history.clear();
         self.show_file_list = false;
         self.file_list_cursor = 0;
     }
@@ -260,6 +265,12 @@ impl App {
         self.tree.scroll_y(1, max);
     }
 
+    fn scroll_page_down(&mut self) {
+        let page = self.focused_pane_height() as i16; // inner height, border already excluded
+        let max = self.focused_file_line_count().saturating_sub(1) as u16;
+        self.tree.scroll_y(page.max(1), max);
+    }
+
     fn scroll_up(&mut self) {
         let max = self.focused_file_line_count().saturating_sub(1) as u16;
         self.tree.scroll_y(-1, max);
@@ -280,6 +291,10 @@ impl App {
             }
         }
         0
+    }
+
+    fn focused_pane_height(&self) -> u16 {
+        self.rect_for(self.tree.focused).height.saturating_sub(2) // subtract border
     }
 
     fn try_split(&mut self) {
@@ -313,6 +328,7 @@ impl App {
 
             self.split_queue.push_back(child_a);
             self.split_queue.push_back(child_b);
+            self.split_history.push(target_id);
 
             if self.tree.focused == target_id {
                 self.tree.focused = child_a;
@@ -344,14 +360,27 @@ impl App {
         self.split_queue.retain(|&id| id != target_id);
         self.split_queue.push_back(child_a);
         self.split_queue.push_back(child_b);
+        self.split_history.push(target_id);
 
         self.tree.focused = child_a;
     }
 
-    fn close_pane(&mut self) {
-        self.tree.close_focused();
-        let leaves = self.tree.collect_leaves(self.tree.root);
-        self.split_queue = VecDeque::from(leaves);
+    fn undo_last_split(&mut self) {
+        while let Some(target) = self.split_history.pop() {
+            if self.tree.undo_split(target) {
+                let leaves = self.tree.collect_leaves(self.tree.root);
+                self.split_queue = VecDeque::from(leaves);
+                return;
+            }
+            // Node was no longer a Split (already undone), try the next one
+        }
+    }
+
+    fn merge_focused(&mut self) {
+        if self.tree.merge_focused() {
+            let leaves = self.tree.collect_leaves(self.tree.root);
+            self.split_queue = VecDeque::from(leaves);
+        }
     }
 
     fn focus_by_index(&mut self, index: usize) {

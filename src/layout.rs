@@ -71,8 +71,43 @@ impl SplitTree {
         (a_id, b_id)
     }
 
-    /// Close the focused pane. Replaces its parent split with the sibling.
-    pub fn close_focused(&mut self) -> bool {
+    /// Undo a specific split. Keeps child_a's subtree, discards child_b's.
+    pub fn undo_split(&mut self, target: NodeId) -> bool {
+        let (a, b) = match &self.nodes[target] {
+            SplitNode::Split { a, b, .. } => (*a, *b),
+            _ => return false,
+        };
+
+        let b_leaves = self.collect_leaves(b);
+        let b_leaf_count = b_leaves.len();
+        let focus_in_b = b_leaves.contains(&self.focused);
+
+        // Move child_a's content into the split node's position
+        let child_a = std::mem::replace(
+            &mut self.nodes[a],
+            SplitNode::Leaf { slot: 0, scroll_y: 0, scroll_x: 0 },
+        );
+        self.nodes[target] = child_a;
+
+        self.leaf_count -= b_leaf_count;
+
+        // Fix focus: a's content moved to target, so remap
+        if self.focused == a {
+            self.focused = target;
+        } else if focus_in_b {
+            let a_leaves = self.collect_leaves(target);
+            if let Some(&first) = a_leaves.first() {
+                self.focused = first;
+            }
+        }
+
+        self.reassign_slots();
+        true
+    }
+
+    /// Merge the focused pane with its sibling, only if the sibling is a leaf.
+    /// Keeps the focused pane's content.
+    pub fn merge_focused(&mut self) -> bool {
         if self.leaf_count <= 1 {
             return false;
         }
@@ -89,24 +124,20 @@ impl SplitTree {
             _ => return false,
         };
 
-        // Replace parent with sibling content
-        let sibling = std::mem::replace(
-            &mut self.nodes[sibling_id],
+        // Only merge if sibling is a whole leaf
+        if !matches!(self.nodes[sibling_id], SplitNode::Leaf { .. }) {
+            return false;
+        }
+
+        // Keep focused leaf content, discard sibling
+        let focused = std::mem::replace(
+            &mut self.nodes[self.focused],
             SplitNode::Leaf { slot: 0, scroll_y: 0, scroll_x: 0 },
         );
-        self.nodes[parent] = sibling;
+        self.nodes[parent] = focused;
 
         self.focused = parent;
         self.leaf_count -= 1;
-
-        // If focused landed on a Split, find a leaf within it
-        if !matches!(self.nodes[self.focused], SplitNode::Leaf { .. }) {
-            let leaves = self.collect_leaves(self.focused);
-            if let Some(&last) = leaves.last() {
-                self.focused = last;
-            }
-        }
-
         self.reassign_slots();
         true
     }
@@ -242,31 +273,74 @@ mod tests {
     }
 
     #[test]
-    fn close_focused_decrements_leaf_count() {
+    fn undo_split_restores_single_leaf() {
         let mut tree = SplitTree::new();
-        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
-        tree.focused = b;
+        tree.split_leaf(0, Direction::Horizontal);
+        assert_eq!(tree.leaf_count, 2);
 
-        assert!(tree.close_focused());
+        assert!(tree.undo_split(0));
         assert_eq!(tree.leaf_count, 1);
-    }
-
-    #[test]
-    fn close_focused_reassigns_slots() {
-        let mut tree = SplitTree::new();
-        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
-        tree.focused = b;
-        tree.close_focused();
-
-        let leaves = tree.collect_leaves(tree.root);
-        assert_eq!(leaves.len(), 1);
+        assert!(matches!(tree.nodes[tree.root], SplitNode::Leaf { .. }));
         assert_slots_sequential(&tree);
     }
 
     #[test]
-    fn close_single_pane_returns_false() {
+    fn undo_split_on_single_pane_returns_false() {
         let mut tree = SplitTree::new();
-        assert!(!tree.close_focused());
+        assert!(!tree.undo_split(0));
+    }
+
+    #[test]
+    fn undo_split_moves_focus_from_discarded_subtree() {
+        let mut tree = SplitTree::new();
+        let (_a, b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = b;
+
+        tree.undo_split(0);
+        // Focus should move to surviving subtree
+        assert!(matches!(tree.nodes[tree.focused], SplitNode::Leaf { .. }));
+    }
+
+    #[test]
+    fn undo_split_keeps_focus_in_surviving_subtree() {
+        let mut tree = SplitTree::new();
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = a;
+
+        tree.undo_split(0);
+        // Focus should remap from child_a to the target node
+        assert_eq!(tree.focused, 0);
+        assert!(matches!(tree.nodes[tree.focused], SplitNode::Leaf { .. }));
+    }
+
+    #[test]
+    fn merge_focused_with_leaf_sibling() {
+        let mut tree = SplitTree::new();
+        let (a, _b) = tree.split_leaf(0, Direction::Horizontal);
+        tree.focused = a;
+
+        assert!(tree.merge_focused());
+        assert_eq!(tree.leaf_count, 1);
+        assert!(matches!(tree.nodes[tree.root], SplitNode::Leaf { .. }));
+        assert_slots_sequential(&tree);
+    }
+
+    #[test]
+    fn merge_focused_rejects_split_sibling() {
+        let mut tree = SplitTree::new();
+        let (a, b) = tree.split_leaf(0, Direction::Horizontal);
+        // Further split child_b so it's no longer a leaf
+        tree.split_leaf(b, Direction::Vertical);
+        tree.focused = a;
+
+        assert!(!tree.merge_focused());
+        assert_eq!(tree.leaf_count, 3); // unchanged
+    }
+
+    #[test]
+    fn merge_focused_single_pane_returns_false() {
+        let mut tree = SplitTree::new();
+        assert!(!tree.merge_focused());
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub struct Highlighter {
 impl Highlighter {
     pub fn new() -> Self {
         Self {
-            syntax_set: SyntaxSet::load_defaults_newlines(),
+            syntax_set: two_face::syntax::extra_newlines(),
             theme_set: ThemeSet::load_defaults(),
         }
     }

@@ -125,8 +125,10 @@ fn print_help() {
     println!("    s                Auto-split (BFS rotation)");
     println!("    S                Split focused pane (auto direction)");
     println!("    v / h            Vertical / horizontal split");
-    println!("    w                Close focused pane");
-    println!("    Space            Hide focused file");
+    println!("    m                Undo last split (merge)");
+    println!("    M                Merge focused pane with sibling");
+    println!("    Space            Page down");
+    println!("    x                Hide focused file");
     println!("    f                File list overlay");
     println!("    r                Reset to initial state");
     println!("    Tab / 0-9        Cycle / jump to pane");

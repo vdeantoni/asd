@@ -69,7 +69,7 @@ pub fn render_file_list(
     let overlay = Rect::new(x, y, width, height);
 
     let title = format!(" Files ({} hidden) ", hidden_count);
-    let footer_text = " Space:toggle  ⇧↑↓:reorder  Enter:go  f:close ";
+    let footer_text = " x:toggle  ⇧↑↓:reorder  Enter:go  f:close ";
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -149,7 +149,7 @@ pub fn render_footer(f: &mut Frame, area: Rect, in_file_list: bool) {
         Line::from(vec![
             Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
-            Span::styled(" Space ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+            Span::styled(" x ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" toggle hide ", Style::default().fg(Color::DarkGray)),
             Span::styled(" ⇧↑↓ ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" reorder ", Style::default().fg(Color::DarkGray)),
@@ -169,13 +169,15 @@ pub fn render_footer(f: &mut Frame, area: Rect, in_file_list: bool) {
             Span::styled(" v/h ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" v/hsplit ", Style::default().fg(Color::DarkGray)),
             Span::styled(" Space ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+            Span::styled(" pgdn ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" x ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" hide ", Style::default().fg(Color::DarkGray)),
             Span::styled(" f ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" files ", Style::default().fg(Color::DarkGray)),
             Span::styled(" Tab/0-9 ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" focus ", Style::default().fg(Color::DarkGray)),
-            Span::styled(" W ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
-            Span::styled(" close ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" m/M ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+            Span::styled(" merge ", Style::default().fg(Color::DarkGray)),
             Span::styled(" ←↑↓→ ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
             Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
             Span::styled(" ⇧←↑↓→ ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
